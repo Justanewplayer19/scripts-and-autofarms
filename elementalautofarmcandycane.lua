@@ -8,6 +8,7 @@ end
 
 svc.plr = call("Players")
 svc.run = call("RunService")
+svc.vu = call("VirtualUser")
 
 local player = svc.plr.LocalPlayer
 local running = false
@@ -24,6 +25,11 @@ local window = KyriLib.new("Candycane Macro", {
 
 local main = window:tab("Main")
 local stats = window:tab("Stats")
+
+player.Idled:Connect(function()
+    svc.vu:CaptureController()
+    svc.vu:ClickButton2(Vector2.new())
+end)
 
 local totalLabel = stats:label("total: 0")
 local countLabels = {}
