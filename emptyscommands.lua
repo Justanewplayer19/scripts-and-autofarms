@@ -411,7 +411,7 @@ function onchat(msg)
     end
     
     local args = string.split(lower, " ")
-    local cmd = args[1]
+    local cmd = args[2]
     
     if cmd == "/spin" then
         dospin(args[2])
@@ -430,9 +430,9 @@ function onchat(msg)
     elseif cmd == "/fling" then
         dofling()
     elseif cmd == "/speed" then
-        dospeed(args[2])
+        dospeed(args[3])
     elseif cmd == "/jump" then
-        dojump(args[2])
+        dojump(args[3])
     elseif cmd == "/god" then
         dogod()
     elseif cmd == "/ungod" then
@@ -456,13 +456,13 @@ function onchat(msg)
     elseif cmd == "/btools" then
         dobtools()
     elseif cmd == "/tp" then
-        doteleport(args[2], args[3], args[4])
+        doteleport(args[3], args[4], args[5])
     elseif cmd == "/explode" then
         doexplode()
     elseif cmd == "/gravity" then
-        dogravity(args[2])
+        dogravity(args[3])
     elseif cmd == "/walkto" then
-        dowalkto(args[2], args[3], args[4])
+        dowalkto(args[3], args[4], args[5])
     elseif cmd == "/wave" then
         dowave()
     elseif cmd == "/r6" then
@@ -476,13 +476,18 @@ end
 
 if svc.txt["ChatVersion"] == Enum.ChatVersion.TextChatService then
     svc.txt["MessageReceived"]:Connect(function(msg)
-        if msg["TextSource"] then
-            onchat(msg["Text"])
-        end
+        onchat(msg["Text"])
     end)
 else
-    svc.plr["PlayerChatted"]:Connect(function(typ, p, m)
-        onchat(m)
+    for _, p in pairs(svc.plr:GetPlayers()) do
+        p["Chatted"]:Connect(function(m)
+            onchat(m)
+        end)
+    end
+    svc.plr["PlayerAdded"]:Connect(function(p)
+        p["Chatted"]:Connect(function(m)
+            onchat(m)
+        end)
     end)
 end
 
