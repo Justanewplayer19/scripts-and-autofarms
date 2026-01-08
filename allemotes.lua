@@ -13,6 +13,7 @@ svc.plr = call("Players")
 svc.sg = call("StarterGui")
 svc.uis = call("UserInputService")
 svc.tele = call("TeleportService")
+svc.run = call("RunService")
 
 if _G.EmoteMenuExecutions then
     _G.EmoteMenuExecutions = _G.EmoteMenuExecutions + 1
@@ -56,6 +57,15 @@ end
 local CurrentSort = "newestfirst"
 local ShowUGC = true
 local IsLoading = false
+local EmoteSpeed = 1
+local SpeedPresets = {
+    {key = "Q", speed = 0.5},
+    {key = "E", speed = 1},
+    {key = "R", speed = 1.5},
+    {key = "T", speed = 2}
+}
+local CurrentEmoteTrack = nil
+local isEmotePlaying = false
 local FavoriteOff = "rbxassetid://10651060677"
 local FavoriteOn = "rbxassetid://10651061109"
 local FavoritedEmotes = {}
@@ -111,6 +121,70 @@ EmoteName.Parent = BackFrame
 local Corner = Instance.new("UICorner")
 Corner.Parent = EmoteName
 
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0.2, 0, 0.08, 0)
+SpeedLabel.SizeConstraint = Enum.SizeConstraint.RelativeYY
+SpeedLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+SpeedLabel.Position = UDim2.new(-0.1, 0, 0.15, 0)
+SpeedLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+SpeedLabel.TextScaled = true
+SpeedLabel.Text = "Speed: " .. EmoteSpeed
+SpeedLabel.TextColor3 = Color3.new(1, 1, 1)
+SpeedLabel.BorderSizePixel = 0
+Corner:Clone().Parent = SpeedLabel
+SpeedLabel.Parent = BackFrame
+
+local SliderBG = Instance.new("Frame")
+SliderBG.Size = UDim2.new(0.18, 0, 0.04, 0)
+SliderBG.SizeConstraint = Enum.SizeConstraint.RelativeYY
+SliderBG.AnchorPoint = Vector2.new(0.5, 0.5)
+SliderBG.Position = UDim2.new(-0.1, 0, 0.27, 0)
+SliderBG.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+SliderBG.BorderSizePixel = 0
+Corner:Clone().Parent = SliderBG
+SliderBG.Parent = BackFrame
+
+local SliderFill = Instance.new("Frame")
+SliderFill.Size = UDim2.new(0.1, 0, 1, 0)
+SliderFill.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+SliderFill.BorderSizePixel = 0
+Corner:Clone().Parent = SliderFill
+SliderFill.Parent = SliderBG
+
+local SliderButton = Instance.new("TextButton")
+SliderButton.Size = UDim2.new(0.08, 0, 1.5, 0)
+SliderButton.Position = UDim2.new(0.1, 0, -0.25, 0)
+SliderButton.AnchorPoint = Vector2.new(0.5, 0)
+SliderButton.BackgroundColor3 = Color3.new(1, 1, 1)
+SliderButton.Text = ""
+SliderButton.BorderSizePixel = 0
+Corner:Clone().Parent = SliderButton
+SliderButton.Parent = SliderBG
+
+local dragging = false
+SliderButton.MouseButton1Down:Connect(function()
+    dragging = true
+end)
+
+svc.uis.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+svc.run.RenderStepped:Connect(function()
+    if dragging then
+        local mouse = svc.plr.LocalPlayer:GetMouse()
+        local relativeX = mouse.X - SliderBG.AbsolutePosition.X
+        local percentage = math.clamp(relativeX / SliderBG.AbsoluteSize.X, 0, 1)
+        local rawSpeed = percentage * 10
+        EmoteSpeed = math.floor(rawSpeed * 100) / 100
+        SpeedLabel.Text = "Speed: " .. EmoteSpeed
+        SliderFill.Size = UDim2.new(percentage, 0, 1, 0)
+        SliderButton.Position = UDim2.new(percentage, 0, -0.25, 0)
+    end
+end)
+
 local Loading = Instance.new("TextLabel")
 Loading.Name = "InitialLoading"
 Loading.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -144,6 +218,88 @@ Grid.CellSize = UDim2.new(0.105, 0, 0, 0)
 Grid.CellPadding = UDim2.new(0.006, 0, 0.006, 0)
 Grid.SortOrder = Enum.SortOrder.LayoutOrder
 Grid.Parent = Frame
+
+local KeybindsFrame = Instance.new("Frame")
+KeybindsFrame.Size = UDim2.new(0.9, 0, 0.12, 0)
+KeybindsFrame.AnchorPoint = Vector2.new(0.5, 0)
+KeybindsFrame.Position = UDim2.new(0.5, 0, 1.05, 0)
+KeybindsFrame.SizeConstraint = Enum.SizeConstraint.RelativeYY
+KeybindsFrame.BackgroundTransparency = 1
+KeybindsFrame.BorderSizePixel = 0
+KeybindsFrame.Parent = BackFrame
+
+local KeybindsLayout = Instance.new("UIGridLayout")
+KeybindsLayout.CellSize = UDim2.new(0.24, 0, 0.48, 0)
+KeybindsLayout.CellPadding = UDim2.new(0.01, 0, 0.04, 0)
+KeybindsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+KeybindsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+KeybindsLayout.Parent = KeybindsFrame
+
+local function createKeybind(idx)
+    local frame = Instance.new("Frame")
+    frame.LayoutOrder = idx
+    frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    frame.BorderSizePixel = 0
+    Corner:Clone().Parent = frame
+    
+    local keyBox = Instance.new("TextBox")
+    keyBox.Size = UDim2.new(0.35, 0, 1, 0)
+    keyBox.Position = UDim2.new(0, 0, 0, 0)
+    keyBox.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    keyBox.TextColor3 = Color3.new(1, 1, 1)
+    keyBox.TextScaled = true
+    keyBox.Text = SpeedPresets[idx].key
+    keyBox.ClearTextOnFocus = false
+    keyBox.BorderSizePixel = 0
+    Corner:Clone().Parent = keyBox
+    keyBox.Parent = frame
+    
+    keyBox.FocusLost:Connect(function()
+        SpeedPresets[idx].key = keyBox.Text
+    end)
+    
+    local speedBox = Instance.new("TextBox")
+    speedBox.Size = UDim2.new(0.63, 0, 1, 0)
+    speedBox.Position = UDim2.new(0.37, 0, 0, 0)
+    speedBox.BackgroundColor3 = Color3.fromRGB(0, 100, 0)
+    speedBox.TextColor3 = Color3.new(1, 1, 1)
+    speedBox.TextScaled = true
+    speedBox.Text = tostring(SpeedPresets[idx].speed)
+    speedBox.ClearTextOnFocus = false
+    speedBox.BorderSizePixel = 0
+    Corner:Clone().Parent = speedBox
+    speedBox.Parent = frame
+    
+    speedBox.FocusLost:Connect(function()
+        local val = tonumber(speedBox.Text)
+        if val then
+            SpeedPresets[idx].speed = math.clamp(val, 0, 10)
+            speedBox.Text = tostring(SpeedPresets[idx].speed)
+        else
+            speedBox.Text = tostring(SpeedPresets[idx].speed)
+        end
+    end)
+    
+    frame.Parent = KeybindsFrame
+end
+
+for i=1,4 do
+    createKeybind(i)
+end
+
+svc.uis.InputBegan:Connect(function(input, gpe)
+    if gpe or not ScreenGui.Enabled then return end
+    for i,preset in pairs(SpeedPresets) do
+        if input.KeyCode == Enum.KeyCode[preset.key:upper()] then
+            EmoteSpeed = preset.speed
+            local sliderPos = math.clamp(EmoteSpeed / 10, 0, 1)
+            SpeedLabel.Text = "Speed: " .. EmoteSpeed
+            SliderFill.Size = UDim2.new(sliderPos, 0, 1, 0)
+            SliderButton.Position = UDim2.new(sliderPos, 0, -0.25, 0)
+            break
+        end
+    end
+end)
 
 local SortFrame = Instance.new("Frame")
 SortFrame.Visible = false
@@ -372,15 +528,81 @@ local function SendNotification(title, text)
     end
 end
 
-local function HumanoidPlayEmote(humanoid, name, id)
-    if IsStudio then
-        return humanoid:PlayEmote(name)
-    else
-        return humanoid:PlayEmoteAndGetAnimTrackById(id)
+local function stopCurrentEmote()
+    if CurrentEmoteTrack then
+        pcall(function()
+            CurrentEmoteTrack:AdjustSpeed(1)
+        end)
+        CurrentEmoteTrack:Stop()
+        CurrentEmoteTrack = nil
+    end
+    isEmotePlaying = false
+    
+    local char = LocalPlayer.Character
+    if char then
+        local h = char:FindFirstChildOfClass("Humanoid") or char:FindFirstChildOfClass("AnimationController")
+        if h then
+            for _, t in pairs(h:GetPlayingAnimationTracks()) do
+                pcall(function()
+                    t:AdjustSpeed(1)
+                end)
+            end
+        end
     end
 end
 
-local function PlayEmote(name, id)
+local function playEmote(humanoid, name, emoteId)
+    local description = humanoid:FindFirstChildOfClass("HumanoidDescription")
+    if not description then
+        description = Instance.new("HumanoidDescription")
+        description.Parent = humanoid
+    end
+    
+    pcall(function()
+        description:AddEmote(name, emoteId)
+    end)
+    
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if animator then
+        local conn
+        conn = animator.AnimationPlayed:Connect(function(t)
+            local aid = t.Animation.AnimationId:match("%d+")
+            if aid == tostring(emoteId) then
+                CurrentEmoteTrack = t
+                isEmotePlaying = true
+                
+                t.Stopped:Connect(function()
+                    isEmotePlaying = false
+                    CurrentEmoteTrack = nil
+                end)
+                
+                conn:Disconnect()
+            end
+        end)
+    end
+    
+    pcall(function()
+        humanoid:PlayEmote(name)
+    end)
+end
+
+svc.run.Heartbeat:Connect(function()
+    if not isEmotePlaying or not CurrentEmoteTrack then return end
+    
+    if CurrentEmoteTrack.IsPlaying then
+        if math.abs(CurrentEmoteTrack.Speed - EmoteSpeed) > 0.01 then
+            pcall(function()
+                CurrentEmoteTrack:AdjustSpeed(EmoteSpeed)
+            end)
+        end
+    end
+end)
+
+local function HumanoidPlayEmote(humanoid, name, id, creator)
+    playEmote(humanoid, name, id)
+end
+
+local function PlayEmote(name, id, creator)
     local Humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
     local Description = Humanoid and Humanoid:FindFirstChildOfClass("HumanoidDescription")
     if not Description then
@@ -388,11 +610,11 @@ local function PlayEmote(name, id)
     end
     if LocalPlayer.Character.Humanoid.RigType ~= Enum.HumanoidRigType.R6 then
         local succ, err = pcall(function()
-            HumanoidPlayEmote(Humanoid, name, id)
+            HumanoidPlayEmote(Humanoid, name, id, creator)
         end)
         if not succ then
             Description:AddEmote(name, id)
-            HumanoidPlayEmote(Humanoid, name, id)
+            HumanoidPlayEmote(Humanoid, name, id, creator)
         end
     else
         SendNotification("r6? lol", "you gotta be r15 dude")
@@ -482,7 +704,7 @@ local function CharacterAdded(Character)
     random.MouseButton1Click:Connect(function()
         playSound(sfx.click)
         local randomemote = Emotes[math.random(1, #Emotes)]
-        PlayEmote(randomemote.name, randomemote.id)
+        PlayEmote(randomemote.name, randomemote.id, randomemote.creator)
     end)
     random.MouseEnter:Connect(function()
         playSound(sfx.hover)
@@ -522,7 +744,7 @@ local function CharacterAdded(Character)
         EmoteButton.Parent = Frame
         EmoteButton.MouseButton1Click:Connect(function()
             playSound(sfx.click)
-            PlayEmote(Emote.name, Emote.id)
+            PlayEmote(Emote.name, Emote.id, Emote.creator)
         end)
         EmoteButton.MouseEnter:Connect(function()
             playSound(sfx.hover)
@@ -748,3 +970,4 @@ LocalPlayer.CharacterAdded:Connect(function(char)
         CharacterAdded(char)
     end
 end)
+print("Loaded! <3")
