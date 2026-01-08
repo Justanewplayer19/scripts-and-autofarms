@@ -273,7 +273,7 @@ local function createKeybind(idx)
     speedBox.FocusLost:Connect(function()
         local val = tonumber(speedBox.Text)
         if val then
-            SpeedPresets[idx].speed = math.clamp(val, 0, 10)
+            SpeedPresets[idx].speed = math.clamp(val, -10, 10)
             speedBox.Text = tostring(SpeedPresets[idx].speed)
         else
             speedBox.Text = tostring(SpeedPresets[idx].speed)
@@ -991,3 +991,4 @@ LocalPlayer.CharacterAdded:Connect(function(char)
         CharacterAdded(char)
     end
 end)
+print("this is a certified hood classic")
