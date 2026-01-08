@@ -59,10 +59,10 @@ local ShowUGC = true
 local IsLoading = false
 local EmoteSpeed = 1
 local SpeedPresets = {
-    {key = "Q", speed = 0.5},
+    {key = "Q", speed = -1},
     {key = "E", speed = 1},
-    {key = "R", speed = 1.5},
-    {key = "T", speed = 2}
+    {key = "R", speed = 2},
+    {key = "T", speed = 5}
 }
 local CurrentEmoteTrack = nil
 local isEmotePlaying = false
@@ -177,7 +177,7 @@ svc.run.RenderStepped:Connect(function()
         local mouse = svc.plr.LocalPlayer:GetMouse()
         local relativeX = mouse.X - SliderBG.AbsolutePosition.X
         local percentage = math.clamp(relativeX / SliderBG.AbsoluteSize.X, 0, 1)
-        local rawSpeed = percentage * 10
+        local rawSpeed = (percentage * 20) - 10
         EmoteSpeed = math.floor(rawSpeed * 100) / 100
         SpeedLabel.Text = "Speed: " .. EmoteSpeed
         SliderFill.Size = UDim2.new(percentage, 0, 1, 0)
@@ -292,7 +292,7 @@ svc.uis.InputBegan:Connect(function(input, gpe)
     for i,preset in pairs(SpeedPresets) do
         if input.KeyCode == Enum.KeyCode[preset.key:upper()] then
             EmoteSpeed = preset.speed
-            local sliderPos = math.clamp(EmoteSpeed / 10, 0, 1)
+            local sliderPos = math.clamp((EmoteSpeed + 10) / 20, 0, 1)
             SpeedLabel.Text = "Speed: " .. EmoteSpeed
             SliderFill.Size = UDim2.new(sliderPos, 0, 1, 0)
             SliderButton.Position = UDim2.new(sliderPos, 0, -0.25, 0)
@@ -564,18 +564,39 @@ local function playEmote(humanoid, name, emoteId)
     
     local animator = humanoid:FindFirstChildOfClass("Animator")
     if animator then
+        local captured = false
         local conn
         conn = animator.AnimationPlayed:Connect(function(t)
-            local aid = t.Animation.AnimationId:match("%d+")
-            if aid == tostring(emoteId) then
-                CurrentEmoteTrack = t
-                isEmotePlaying = true
+            if captured then return end
+            
+            if t.Priority == Enum.AnimationPriority.Core or t.Priority == Enum.AnimationPriority.Action then
+                local aid = t.Animation.AnimationId
+                local isWalk = aid:find("180426354") or aid:find("180435571") or 
+                               aid:find("180435792") or aid:find("656117878") or 
+                               aid:find("656118852") or aid:find("913376220")
                 
-                t.Stopped:Connect(function()
-                    isEmotePlaying = false
-                    CurrentEmoteTrack = nil
-                end)
-                
+                if not isWalk then
+                    CurrentEmoteTrack = t
+                    isEmotePlaying = true
+                    captured = true
+                    
+                    task.wait(0.1)
+                    pcall(function()
+                        t:AdjustSpeed(EmoteSpeed)
+                    end)
+                    
+                    t.Stopped:Connect(function()
+                        isEmotePlaying = false
+                        CurrentEmoteTrack = nil
+                    end)
+                    
+                    conn:Disconnect()
+                end
+            end
+        end)
+        
+        task.delay(2, function()
+            if conn then
                 conn:Disconnect()
             end
         end)
@@ -970,4 +991,3 @@ LocalPlayer.CharacterAdded:Connect(function(char)
         CharacterAdded(char)
     end
 end)
-print("Loaded! <3")
