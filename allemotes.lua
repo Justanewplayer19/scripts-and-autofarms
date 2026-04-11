@@ -37,7 +37,7 @@ else
 end
 
 local IsStudio = false
-local switch = true
+local switch = false
 local IsMobile = switch or (svc.uis.TouchEnabled and not svc.uis.MouseEnabled)
 local Emotes = {}
 
