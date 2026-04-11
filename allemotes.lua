@@ -37,6 +37,8 @@ else
 end
 
 local IsStudio = false
+local switch = true
+local IsMobile = switch or (svc.uis.TouchEnabled and not svc.uis.MouseEnabled)
 local Emotes = {}
 
 local function AddEmote(name, id, price, creator)
@@ -161,27 +163,66 @@ SliderButton.BorderSizePixel = 0
 Corner:Clone().Parent = SliderButton
 SliderButton.Parent = SliderBG
 
+local ResetSpeed = Instance.new("TextButton")
+ResetSpeed.Size = UDim2.new(0.18, 0, 0.05, 0)
+ResetSpeed.SizeConstraint = Enum.SizeConstraint.RelativeYY
+ResetSpeed.AnchorPoint = Vector2.new(0.5, 0.5)
+ResetSpeed.Position = UDim2.new(-0.1, 0, 0.355, 0)
+ResetSpeed.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ResetSpeed.TextColor3 = Color3.new(1, 1, 1)
+ResetSpeed.TextScaled = true
+ResetSpeed.Text = "Reset Speed"
+ResetSpeed.BorderSizePixel = 0
+Corner:Clone().Parent = ResetSpeed
+ResetSpeed.Parent = BackFrame
+
 local dragging = false
+
+local function applySlider(absX)
+    local relativeX = absX - SliderBG.AbsolutePosition.X
+    local percentage = math.clamp(relativeX / SliderBG.AbsoluteSize.X, 0, 1)
+    local rawSpeed = (percentage * 20) - 10
+    EmoteSpeed = math.floor(rawSpeed * 100) / 100
+    SpeedLabel.Text = "Speed: " .. EmoteSpeed
+    SliderFill.Size = UDim2.new(percentage, 0, 1, 0)
+    SliderButton.Position = UDim2.new(percentage, 0, -0.25, 0)
+end
+
+ResetSpeed.MouseButton1Click:Connect(function()
+    playSound(sfx.click)
+    EmoteSpeed = 1
+    SpeedLabel.Text = "Speed: 1"
+    local resetPos = math.clamp((1 + 10) / 20, 0, 1)
+    SliderFill.Size = UDim2.new(resetPos, 0, 1, 0)
+    SliderButton.Position = UDim2.new(resetPos, 0, -0.25, 0)
+end)
+
 SliderButton.MouseButton1Down:Connect(function()
     dragging = true
 end)
+SliderBG.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        applySlider(input.Position.X)
+    end
+end)
 
 svc.uis.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
+    end
+end)
+svc.uis.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.Touch then
+        applySlider(input.Position.X)
     end
 end)
 
 svc.run.RenderStepped:Connect(function()
     if dragging then
         local mouse = svc.plr.LocalPlayer:GetMouse()
-        local relativeX = mouse.X - SliderBG.AbsolutePosition.X
-        local percentage = math.clamp(relativeX / SliderBG.AbsoluteSize.X, 0, 1)
-        local rawSpeed = (percentage * 20) - 10
-        EmoteSpeed = math.floor(rawSpeed * 100) / 100
-        SpeedLabel.Text = "Speed: " .. EmoteSpeed
-        SliderFill.Size = UDim2.new(percentage, 0, 1, 0)
-        SliderButton.Position = UDim2.new(percentage, 0, -0.25, 0)
+        applySlider(mouse.X)
     end
 end)
 
@@ -459,6 +500,28 @@ end)
 Corner:Clone().Parent = SearchBar
 SearchBar.Parent = BackFrame
 
+if IsMobile then
+    BackFrame.SizeConstraint = Enum.SizeConstraint.RelativeYY
+    BackFrame.Size = UDim2.new(0.4, 0, 0.55, 0)
+    BackFrame.AnchorPoint = Vector2.new(1, 1)
+    BackFrame.Position = UDim2.new(1, -8, 1, -80)
+    KeybindsFrame.Visible = false
+    Grid.CellSize = UDim2.new(0.155, 0, 0, 0)
+    Grid.CellPadding = UDim2.new(0.008, 0, 0.008, 0)
+
+    EmoteName.Position = UDim2.new(-0.28, 0, 0.5, 0)
+    SpeedLabel.Position = UDim2.new(-0.28, 0, 0.15, 0)
+    SliderBG.Position = UDim2.new(-0.28, 0, 0.27, 0)
+    ResetSpeed.Position = UDim2.new(-0.28, 0, 0.355, 0)
+    UGCButton.Position = UDim2.new(-0.28, 0, 0.75, 0)
+
+    task.delay(0.5, function()
+        pcall(function()
+            svc.ctx:SetPosition("Emote Menu", UDim2.new(0, 8, 1, -80))
+        end)
+    end)
+end
+
 local function openemotes(name, state, input)
     if state == Enum.UserInputState.Begin then
         ScreenGui.Enabled = not ScreenGui.Enabled
@@ -468,7 +531,7 @@ end
 if IsStudio then
     svc.ctx:BindActionAtPriority("Emote Menu", openemotes, true, 2001, Enum.KeyCode.Comma)
 else
-    svc.ctx:BindCoreActionAtPriority("Emote Menu", openemotes, true, 2001, Enum.KeyCode.Comma)
+    svc.ctx:BindActionAtPriority("Emote Menu", openemotes, true, 2001, Enum.KeyCode.Comma)
 end
 
 ScreenGui:GetPropertyChangedSignal("Enabled"):Connect(function()
