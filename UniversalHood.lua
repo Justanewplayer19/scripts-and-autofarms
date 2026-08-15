@@ -11,13 +11,35 @@ local svc = setmetatable({}, {
 local ws = svc.Workspace
 local lp = svc.Players.LocalPlayer
 
+local exec = type(fireclickdetector) == "function"
+
+local cfg = {
+    standOut = 6,
+    standUp = 1,
+    execStandOut = 3,
+
+    settle = 0.15,
+    aimSettle = 0.35,
+    reaimSettle = 0.15,
+    pressHold = 0.15,
+    spotSettle = 0.1,
+    verifyWait = 0.2,
+
+    shopTimeout = 3,
+
+    tries = exec and 8 or 15,
+    retryDelay = exec and 0.3 or 0.6,
+
+    blockInput = true,
+    armorMax = 200,
+}
+
 local function genv()
     if type(getgenv) == "function" then return getgenv() end
     return _G
 end
 
 local wsLibrary
-
 local shop = ws:WaitForChild("Ignored"):WaitForChild("Shop")
 
 local function chr()
@@ -40,36 +62,72 @@ local function be()
     return pf and pf:FindFirstChild("BodyEffects")
 end
 
-local function shopBusy()
+local function flag(name)
     local b = be()
-    local s = b and b:FindFirstChild("Shop")
+    return b and b:FindFirstChild(name)
+end
+
+local function shopBusy()
+    local s = flag("Shop")
     return s ~= nil and s.Value == true
 end
 
-local function waitForShop(timeout)
+local function waitForShop()
     local t0 = tick()
-    while shopBusy() and tick() - t0 < (timeout or 3) do
+    while shopBusy() and tick() - t0 < cfg.shopTimeout do
         task.wait(0.1)
     end
     return not shopBusy()
 end
 
 local function ko()
-    local b = be()
-    local k = b and b:FindFirstChild("K.O")
+    local k = flag("K.O")
     if k ~= nil and k.Value == true then return true end
 
     local h = hum()
-    if h and h.PlatformStand then return true end
+    return h ~= nil and h.PlatformStand == true
+end
 
-    return false
+local function armorValue()
+    local a = flag("Armor")
+    return a and a.Value
+end
+
+-- externals differ on whether CFrame writes land, so probe once then remember
+local canCFrame = nil
+
+local function place(part, pos, lookAt)
+    if canCFrame ~= false then
+        local ok = pcall(function()
+            part.CFrame = lookAt and CFrame.new(pos, lookAt) or CFrame.new(pos)
+        end)
+        if ok then
+            canCFrame = true
+            return
+        end
+        canCFrame = false
+    end
+
+    part.Position = pos
+end
+
+local function screenPos(pos)
+    if type(WorldToScreen) == "function" then
+        local pt, on = WorldToScreen(pos)
+        if pt then return pt.X, pt.Y, on end
+        return 0, 0, false
+    end
+
+    local ok, pt, on = pcall(function()
+        return ws.CurrentCamera:WorldToViewportPoint(pos)
+    end)
+    if not ok or not pt then return 0, 0, false end
+    return pt.X, pt.Y, on
 end
 
 local function find(pattern)
     local g = grm()
-    if not g then return nil end
-
-    local gp = g.Position
+    local gp = g and g.Position
     if not gp then return nil end
 
     local best, dist = nil, math.huge
@@ -79,13 +137,15 @@ local function find(pattern)
             local cd = v:FindFirstChildOfClass("ClickDetector")
 
             if cd then
-                local hd = v:FindFirstChild("Head") or v:FindFirstChild("HumanoidRootPart") or v:FindFirstChildWhichIsA("BasePart")
+                local hd = v:FindFirstChild("Head")
+                    or v:FindFirstChild("HumanoidRootPart")
+                    or v:FindFirstChildWhichIsA("BasePart")
 
-                if not hd and v:IsA("BasePart") then
-                    hd = v
+                -- IsA lies on some externals, so just test for a usable position
+                if not hd then
+                    local okPos, pos = pcall(function() return v.Position end)
+                    if okPos and pos then hd = v end
                 end
-
-                local stand = v:FindFirstChild("HumanoidRootPart") or hd
 
                 local hp = hd and hd.Position
 
@@ -93,7 +153,13 @@ local function find(pattern)
                     local d = (hp - gp).Magnitude
                     if d < dist then
                         dist = d
-                        best = {cd = cd, hd = hd, stand = stand, d = d}
+                        best = {
+                            cd = cd,
+                            hd = hd,
+                            stand = v:FindFirstChild("HumanoidRootPart") or hd,
+                            d = d,
+                            pattern = pattern,
+                        }
                     end
                 end
             end
@@ -103,63 +169,110 @@ local function find(pattern)
     return best
 end
 
+-- blocking real input stops the player's own mouse from fighting the aim,
+-- but it also drops the game's cursor lock, so save and restore that too
+local function withInputBlocked(fn)
+    if not (cfg.blockInput and type(setrobloxinput) == "function") then
+        return fn()
+    end
+
+    local uis = svc.UserInputService
+    local behavior, iconOn
+
+    pcall(function()
+        behavior = uis.MouseBehavior
+        iconOn = uis.MouseIconEnabled
+    end)
+
+    pcall(setrobloxinput, false)
+    local ok, res = pcall(fn)
+    pcall(setrobloxinput, true)
+
+    pcall(function()
+        if behavior ~= nil then uis.MouseBehavior = behavior end
+        if iconOn ~= nil then uis.MouseIconEnabled = iconOn end
+    end)
+
+    if not ok then return false end
+    return res
+end
+
 local function click(cd, hd)
-    if type(fireclickdetector) == "function" then
+    if exec then
         return pcall(fireclickdetector, cd)
     end
 
     if type(mouse1click) ~= "function" then return false end
     if type(isrbxactive) == "function" and not isrbxactive() then return false end
 
-    local x, y, onscreen
-
-    if type(WorldToScreen) == "function" then
-        local pt
-        pt, onscreen = WorldToScreen(hd.Position)
-        x, y = pt.X, pt.Y
-    else
-        local cam = ws.CurrentCamera
-        local ok, pt, os2 = pcall(function()
-            return cam:WorldToViewportPoint(hd.Position)
-        end)
-        if not ok then return false end
-        x, y, onscreen = pt.X, pt.Y, os2
-    end
-
+    local x, y, onscreen = screenPos(hd.Position)
     if not onscreen then return false end
 
     local hid = wsLibrary and not wsLibrary.Unloaded
     if hid then pcall(function() wsLibrary:Minimize() end) end
 
-    local blocked = type(setrobloxinput) == "function"
-    if blocked then pcall(setrobloxinput, false) end
-
-    local ok, clicked = pcall(function()
+    local clicked = withInputBlocked(function()
         if type(mousemoveabs) == "function" then
             pcall(mousemoveabs, x, y)
-            task.wait(0.35)
+            task.wait(cfg.aimSettle)
 
-            local pt2, onscreen2 = WorldToScreen(hd.Position)
-            if onscreen2 then
-                pcall(mousemoveabs, pt2.X, pt2.Y)
-                task.wait(0.15)
+            local nx, ny, still = screenPos(hd.Position)
+            if still then
+                pcall(mousemoveabs, nx, ny)
+                task.wait(cfg.reaimSettle)
             end
         end
 
         if type(mouse1press) == "function" and type(mouse1release) == "function" then
             pcall(mouse1press)
-            task.wait(0.15)
+            task.wait(cfg.pressHold)
             return pcall(mouse1release)
-        else
-            return pcall(mouse1click)
         end
+
+        return pcall(mouse1click)
     end)
 
-    if blocked then pcall(setrobloxinput, true) end
     if hid then pcall(function() wsLibrary:Minimize() end) end
 
-    if not ok then return false end
     return clicked
+end
+
+-- stalls sit in wildly different geometry, so try a few spots and keep
+-- whichever one actually leaves the target visible
+local function standSpots(t)
+    local spots = {}
+
+    local ok, cf = pcall(function() return t.stand.CFrame end)
+    if ok and cf then
+        spots[#spots+1] = cf.LookVector.Unit * cfg.standOut
+        spots[#spots+1] = cf.LookVector.Unit * -cfg.standOut
+        spots[#spots+1] = cf.RightVector.Unit * cfg.standOut
+        spots[#spots+1] = cf.RightVector.Unit * -cfg.standOut
+    end
+
+    spots[#spots+1] = Vector3.new(cfg.standOut, 0, 0)
+    spots[#spots+1] = Vector3.new(-cfg.standOut, 0, 0)
+    spots[#spots+1] = Vector3.new(0, 0, cfg.standOut)
+    spots[#spots+1] = Vector3.new(0, 0, -cfg.standOut)
+
+    return spots
+end
+
+local function placeNear(g, t)
+    local up = Vector3.new(0, cfg.standUp, 0)
+
+    for i,off in ipairs(standSpots(t)) do
+        place(g, t.stand.Position + off + up, t.hd.Position)
+        task.wait(cfg.spotSettle)
+
+        local _, _, on = screenPos(t.hd.Position)
+        if on or type(WorldToScreen) ~= "function" then
+            return true
+        end
+    end
+
+    place(g, t.hd.Position + Vector3.new(cfg.standOut, cfg.standUp, 0), t.hd.Position)
+    return false
 end
 
 local function moveTo(pos)
@@ -168,7 +281,7 @@ local function moveTo(pos)
 
     local ok = false
 
-    if type(fireclickdetector) == "function" and c then
+    if exec and c then
         ok = pcall(function()
             local pivot = c:GetPivot()
             c:PivotTo(pivot - pivot.Position + pos)
@@ -183,101 +296,44 @@ end
 local firing = false
 
 local function fireExternal(t)
-    if not t then return false end
     if firing then return false end
     firing = true
 
-    local cd, hd = t.cd, t.hd
-    local g = grm()
+    local ok, result = pcall(function()
+        local g = grm()
+        if not g or not t.cd.Parent then return false end
+        if ko() then return false end
 
-    if not g or not cd or not cd.Parent then
-        firing = false
-        return false
-    end
+        local old
+        local maxdist = t.cd.MaxActivationDistance or 0
 
-    if ko() then
-        firing = false
-        return false
-    end
-
-    local old
-    local maxdist = cd.MaxActivationDistance or 0
-
-    if t.d > maxdist then
-        old = g.CFrame
-
-        local candidates = {}
-        local okLook, look = pcall(function() return t.stand.CFrame.LookVector end)
-        local okRight, right = pcall(function() return t.stand.CFrame.RightVector end)
-
-        if okLook and look and look.Magnitude > 0 then
-            table.insert(candidates, look.Unit * 6)
-            table.insert(candidates, look.Unit * -6)
-        end
-        if okRight and right and right.Magnitude > 0 then
-            table.insert(candidates, right.Unit * 6)
-            table.insert(candidates, right.Unit * -6)
-        end
-        table.insert(candidates, Vector3.new(6, 0, 0))
-        table.insert(candidates, Vector3.new(-6, 0, 0))
-        table.insert(candidates, Vector3.new(0, 0, 6))
-        table.insert(candidates, Vector3.new(0, 0, -6))
-
-        local placed = false
-
-        for i,offset in ipairs(candidates) do
-            local target = t.stand.Position + offset + Vector3.new(0, 1, 0)
-
-            local faced = pcall(function()
-                g.CFrame = CFrame.new(target, hd.Position)
-            end)
-            if not faced then
-                g.Position = target
-            end
-
-            task.wait(0.1)
-
-            local ok2, onscreen2 = pcall(function()
-                local pt, os2 = WorldToScreen(hd.Position)
-                return os2
-            end)
-
-            if type(WorldToScreen) ~= "function" or (ok2 and onscreen2) then
-                placed = true
-                break
-            end
-        end
-
-        if not placed then
-            local target = hd.Position + Vector3.new(6, 1, 0)
-            pcall(function()
-                g.CFrame = CFrame.new(target, hd.Position)
-            end)
-        end
-
-        pcall(function() g.AssemblyLinearVelocity = Vector3.zero end)
-        task.wait(0.15)
-    end
-
-    local ok = click(cd, hd)
-
-    if old then
-        task.wait(0.15)
-        if g.Parent then
-            local restored = pcall(function() g.CFrame = old end)
-            if not restored then
-                g.Position = old.Position
-            end
+        if t.d > maxdist then
+            old = g.Position
+            placeNear(g, t)
             pcall(function() g.AssemblyLinearVelocity = Vector3.zero end)
+            task.wait(cfg.settle)
         end
-    end
+
+        local clicked = click(t.cd, t.hd)
+
+        if old then
+            task.wait(cfg.settle)
+            if g.Parent then
+                place(g, old)
+                pcall(function() g.AssemblyLinearVelocity = Vector3.zero end)
+            end
+        end
+
+        return clicked
+    end)
 
     firing = false
-    return ok
+
+    if not ok then return false end
+    return result
 end
 
 local function fireExec(t)
-    if not t then return false end
     if firing then return false end
     firing = true
 
@@ -291,25 +347,23 @@ local function fireExec(t)
             moveTo(old)
             pcall(function() g.AssemblyLinearVelocity = Vector3.zero end)
 
-            if type(fireclickdetector) == "function" then
-                local h = hum()
-                if h then
-                    pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
-                end
+            local h = hum()
+            if h then
+                pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
             end
         end
     end
 
     local ok, result = pcall(function()
-        local cd, hd, stand = t.cd, t.hd, t.stand or t.hd
+        local cd, hd, stand = t.cd, t.hd, t.stand
         local g = grm()
-        if not g or not cd or not cd.Parent then return false end
+        if not g or not cd.Parent then return false end
         if ko() then return false end
 
         local h = hum()
         local hpBefore = h and h.Health
 
-        if t.d > cd.MaxActivationDistance then
+        if t.d > (cd.MaxActivationDistance or 0) then
             old = g.Position
             holding = true
 
@@ -320,29 +374,25 @@ local function fireExec(t)
                 end
             end)
 
-            moveTo(stand.Position + Vector3.new(3, 0, 0))
-            task.wait(0.15)
+            moveTo(stand.Position + Vector3.new(cfg.execStandOut, 0, 0))
+            task.wait(cfg.settle)
 
             local hpNow = h and h.Health
-            local damaged = hpBefore and hpNow and hpNow < hpBefore - 0.5
-
-            if damaged or ko() then
+            if (hpBefore and hpNow and hpNow < hpBefore - 0.5) or ko() then
                 return false
             end
 
             if not cd.Parent then
                 local t2 = find(t.pattern)
                 if not t2 then return false end
-                cd = t2.cd
-                hd = t2.hd
-                stand = t2.stand or t2.hd
+                cd, hd = t2.cd, t2.hd
             end
         end
 
         local clicked = click(cd, hd)
 
         if old then
-            task.wait(0.15)
+            task.wait(cfg.settle)
         end
 
         return clicked
@@ -356,77 +406,75 @@ local function fireExec(t)
 end
 
 local function fire(t)
-    if type(fireclickdetector) == "function" then
-        return fireExec(t)
-    else
-        return fireExternal(t)
-    end
-end
-
-local function armorValue()
-    local b = be()
-    local a = b and b:FindFirstChild("Armor")
-    return a and a.Value
+    if not t then return false end
+    return exec and fireExec(t) or fireExternal(t)
 end
 
 local verifiers = {
-    ["full armor"] = { get = armorValue, max = 200 },
+    ["full armor"] = { get = armorValue, max = cfg.armorMax },
 }
 
+local busy = false
+
 local function buy(pattern)
-    local v = verifiers[pattern]
-    local verify = v and v.get
-    local before = verify and verify()
+    if busy then return false end
+    busy = true
 
-    if verify and v.max and before ~= nil and before >= v.max then
-        return true
-    end
+    local ok, result = pcall(function()
+        local v = verifiers[pattern]
+        local get = v and v.get
+        local before = get and get()
 
-    if type(fireclickdetector) ~= "function" and type(notify) == "function" then
-        pcall(notify, "look toward a shop stall now", "rebuy", 3)
-    end
-
-    local tries = type(fireclickdetector) == "function" and 8 or 15
-    local delay = type(fireclickdetector) == "function" and 0.3 or 0.6
-
-    for i = 1, tries do
-        if not waitForShop(3) then
-            return false
-        end
-
-        local ok = fire(find(pattern))
-
-        waitForShop(3)
-
-        if verify then
-            task.wait(0.2)
-            local now = verify()
-            if now ~= nil and now ~= before then
-                return true
-            end
-        elseif ok then
+        if get and v.max and before and before >= v.max then
             return true
         end
 
-        task.wait(delay)
-    end
+        if not exec and type(notify) == "function" then
+            pcall(notify, "look toward a shop stall now", "rebuy", 3)
+        end
 
-    return false
+        for i = 1, cfg.tries do
+            if not waitForShop() then return false end
+
+            local fired = fire(find(pattern))
+            waitForShop()
+
+            if get then
+                task.wait(cfg.verifyWait)
+                local now = get()
+
+                -- only a rise counts; taking damage mid-loop also changes the value
+                if now and before and now > before then return true end
+                if now and v.max and now >= v.max then return true end
+            elseif fired then
+                return true
+            end
+
+            task.wait(cfg.retryDelay)
+        end
+
+        return false
+    end)
+
+    busy = false
+
+    if not ok then return false end
+    return result
 end
 
 local api = {
     armor = function() return buy("full armor") end,
     stim = function() return buy("stim") end,
+    isBusy = function() return busy end,
 }
 rawset(genv(), "rebuy", api)
 
-if type(fireclickdetector) ~= "function" then
+if not exec then
     pcall(function()
         loadstring(game:HttpGet("https://scripts.wabisabi.mom/wabi-sabi-ui-lib.lua"))()
-        local Library = WabiSabi
-        wsLibrary = Library
+        wsLibrary = WabiSabi
 
-        local Window = Library:CreateWindow({
+        local Window = wsLibrary:CreateWindow({
             Title = "rebuy",
             SubTitle = "manual buy",
             Size = Vector2.new(260, 160),
@@ -506,6 +554,8 @@ else
         bc.Parent = btn
 
         btn.MouseButton1Click:Connect(function()
+            if busy then return end
+
             btn.Text = "..."
             local ok = fn()
             btn.Text = ok and (text .. " ✓") or (text .. " ✗")
@@ -518,8 +568,7 @@ else
     makebtn("Stim", 40, api.stim)
 end
 
-local mode = type(fireclickdetector) == "function" and "exec version" or "external version"
-print("ur now running: " .. mode)
+print("ur now running: " .. (exec and "exec version" or "external version"))
 if type(notify) == "function" then
-    pcall(notify, "ur now running: " .. mode, "Rebuy", 5)
+    pcall(notify, "ur now running: " .. (exec and "exec version" or "external version"), "Rebuy", 5)
 end
