@@ -30,7 +30,6 @@ local cfg = {
     tries = exec and 8 or 15,
     retryDelay = exec and 0.3 or 0.6,
 
-    blockInput = true,
     armorMax = 200,
 }
 
@@ -169,32 +168,12 @@ local function find(pattern)
     return best
 end
 
--- blocking real input stops the player's own mouse from fighting the aim,
--- but it also drops the game's cursor lock, so save and restore that too
-local function withInputBlocked(fn)
-    if not (cfg.blockInput and type(setrobloxinput) == "function") then
-        return fn()
+-- setrobloxinput toggles OUR injected input, not the player's, so it has to
+-- be on for any of the mouse calls below to reach the game
+local function armInput()
+    if type(setrobloxinput) == "function" then
+        pcall(setrobloxinput, true)
     end
-
-    local uis = svc.UserInputService
-    local behavior, iconOn
-
-    pcall(function()
-        behavior = uis.MouseBehavior
-        iconOn = uis.MouseIconEnabled
-    end)
-
-    pcall(setrobloxinput, false)
-    local ok, res = pcall(fn)
-    pcall(setrobloxinput, true)
-
-    pcall(function()
-        if behavior ~= nil then uis.MouseBehavior = behavior end
-        if iconOn ~= nil then uis.MouseIconEnabled = iconOn end
-    end)
-
-    if not ok then return false end
-    return res
 end
 
 local function click(cd, hd)
@@ -211,7 +190,9 @@ local function click(cd, hd)
     local hid = wsLibrary and not wsLibrary.Unloaded
     if hid then pcall(function() wsLibrary:Minimize() end) end
 
-    local clicked = withInputBlocked(function()
+    armInput()
+
+    local ok, clicked = pcall(function()
         if type(mousemoveabs) == "function" then
             pcall(mousemoveabs, x, y)
             task.wait(cfg.aimSettle)
@@ -234,6 +215,7 @@ local function click(cd, hd)
 
     if hid then pcall(function() wsLibrary:Minimize() end) end
 
+    if not ok then return false end
     return clicked
 end
 
