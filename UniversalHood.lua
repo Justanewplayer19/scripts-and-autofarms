@@ -133,14 +133,20 @@ local function click(cd, hd)
 
     if type(mousemoveabs) == "function" then
         pcall(mousemoveabs, x, y)
-        task.wait(0.15)
+        task.wait(0.35)
+
+        local pt2, onscreen2 = WorldToScreen(hd.Position)
+        if onscreen2 then
+            pcall(mousemoveabs, pt2.X, pt2.Y)
+            task.wait(0.15)
+        end
     end
 
     local clicked
 
     if type(mouse1press) == "function" and type(mouse1release) == "function" then
         pcall(mouse1press)
-        task.wait(0.08)
+        task.wait(0.15)
         clicked = pcall(mouse1release)
     else
         clicked = pcall(mouse1click)
@@ -195,7 +201,7 @@ local function fireExternal(t)
     if t.d > maxdist then
         old = g.CFrame
 
-        local target = hd.Position + Vector3.new(0, 3, 0)
+        local target = hd.Position + Vector3.new(6, 1, 0)
         local faced = pcall(function()
             g.CFrame = CFrame.new(target, hd.Position)
         end)
@@ -318,19 +324,24 @@ local function armorValue()
 end
 
 local verifiers = {
-    ["full armor"] = armorValue,
+    ["full armor"] = { get = armorValue, max = 200 },
 }
 
 local function buy(pattern)
+    local v = verifiers[pattern]
+    local verify = v and v.get
+    local before = verify and verify()
+
+    if verify and v.max and before ~= nil and before >= v.max then
+        return true
+    end
+
     if type(fireclickdetector) ~= "function" and type(notify) == "function" then
         pcall(notify, "look toward a shop stall now", "rebuy", 3)
     end
 
     local tries = type(fireclickdetector) == "function" and 8 or 15
     local delay = type(fireclickdetector) == "function" and 0.3 or 0.6
-
-    local verify = verifiers[pattern]
-    local before = verify and verify()
 
     for i = 1, tries do
         if not waitForShop(3) then
