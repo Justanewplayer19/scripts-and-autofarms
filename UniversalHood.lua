@@ -131,29 +131,34 @@ local function click(cd, hd)
     local hid = wsLibrary and not wsLibrary.Unloaded
     if hid then pcall(function() wsLibrary:Minimize() end) end
 
-    if type(mousemoveabs) == "function" then
-        pcall(mousemoveabs, x, y)
-        task.wait(0.35)
+    local blocked = type(setrobloxinput) == "function"
+    if blocked then pcall(setrobloxinput, false) end
 
-        local pt2, onscreen2 = WorldToScreen(hd.Position)
-        if onscreen2 then
-            pcall(mousemoveabs, pt2.X, pt2.Y)
-            task.wait(0.15)
+    local ok, clicked = pcall(function()
+        if type(mousemoveabs) == "function" then
+            pcall(mousemoveabs, x, y)
+            task.wait(0.35)
+
+            local pt2, onscreen2 = WorldToScreen(hd.Position)
+            if onscreen2 then
+                pcall(mousemoveabs, pt2.X, pt2.Y)
+                task.wait(0.15)
+            end
         end
-    end
 
-    local clicked
+        if type(mouse1press) == "function" and type(mouse1release) == "function" then
+            pcall(mouse1press)
+            task.wait(0.15)
+            return pcall(mouse1release)
+        else
+            return pcall(mouse1click)
+        end
+    end)
 
-    if type(mouse1press) == "function" and type(mouse1release) == "function" then
-        pcall(mouse1press)
-        task.wait(0.15)
-        clicked = pcall(mouse1release)
-    else
-        clicked = pcall(mouse1click)
-    end
-
+    if blocked then pcall(setrobloxinput, true) end
     if hid then pcall(function() wsLibrary:Minimize() end) end
 
+    if not ok then return false end
     return clicked
 end
 
@@ -201,19 +206,53 @@ local function fireExternal(t)
     if t.d > maxdist then
         old = g.CFrame
 
-        local target
+        local candidates = {}
         local okLook, look = pcall(function() return t.stand.CFrame.LookVector end)
+        local okRight, right = pcall(function() return t.stand.CFrame.RightVector end)
+
         if okLook and look and look.Magnitude > 0 then
-            target = t.stand.Position + look.Unit * 6 + Vector3.new(0, 1, 0)
-        else
-            target = hd.Position + Vector3.new(6, 1, 0)
+            table.insert(candidates, look.Unit * 6)
+            table.insert(candidates, look.Unit * -6)
+        end
+        if okRight and right and right.Magnitude > 0 then
+            table.insert(candidates, right.Unit * 6)
+            table.insert(candidates, right.Unit * -6)
+        end
+        table.insert(candidates, Vector3.new(6, 0, 0))
+        table.insert(candidates, Vector3.new(-6, 0, 0))
+        table.insert(candidates, Vector3.new(0, 0, 6))
+        table.insert(candidates, Vector3.new(0, 0, -6))
+
+        local placed = false
+
+        for i,offset in ipairs(candidates) do
+            local target = t.stand.Position + offset + Vector3.new(0, 1, 0)
+
+            local faced = pcall(function()
+                g.CFrame = CFrame.new(target, hd.Position)
+            end)
+            if not faced then
+                g.Position = target
+            end
+
+            task.wait(0.1)
+
+            local ok2, onscreen2 = pcall(function()
+                local pt, os2 = WorldToScreen(hd.Position)
+                return os2
+            end)
+
+            if type(WorldToScreen) ~= "function" or (ok2 and onscreen2) then
+                placed = true
+                break
+            end
         end
 
-        local faced = pcall(function()
-            g.CFrame = CFrame.new(target, hd.Position)
-        end)
-        if not faced then
-            g.Position = target
+        if not placed then
+            local target = hd.Position + Vector3.new(6, 1, 0)
+            pcall(function()
+                g.CFrame = CFrame.new(target, hd.Position)
+            end)
         end
 
         pcall(function() g.AssemblyLinearVelocity = Vector3.zero end)
