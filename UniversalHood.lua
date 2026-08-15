@@ -201,7 +201,14 @@ local function fireExternal(t)
     if t.d > maxdist then
         old = g.CFrame
 
-        local target = hd.Position + Vector3.new(6, 1, 0)
+        local target
+        local okLook, look = pcall(function() return t.stand.CFrame.LookVector end)
+        if okLook and look and look.Magnitude > 0 then
+            target = t.stand.Position + look.Unit * 6 + Vector3.new(0, 1, 0)
+        else
+            target = hd.Position + Vector3.new(6, 1, 0)
+        end
+
         local faced = pcall(function()
             g.CFrame = CFrame.new(target, hd.Position)
         end)
