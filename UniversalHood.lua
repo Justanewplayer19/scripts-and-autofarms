@@ -19,6 +19,7 @@ local cfg = {
     execStandOut = 3,
 
     settle = 0.15,
+    postPlace = 0.4,
     aimSettle = 0.35,
     reaimSettle = 0.15,
     pressHold = 0.15,
@@ -219,10 +220,56 @@ local function click(cd, hd)
     return clicked
 end
 
+local function camPos()
+    local cam = ws.CurrentCamera
+    if not cam then return nil end
+
+    local ok, p = pcall(function() return cam.Position end)
+    if ok and p then return p end
+
+    ok, p = pcall(function() return cam.CFrame.Position end)
+    if ok and p then return p end
+
+    return nil
+end
+
+-- onscreen only means "inside the view cone", so a wall between us and the
+-- stall still passes. raycast when we can; stay permissive when we can't.
+local function clearShot(to)
+    local from = camPos()
+    if not from then return true end
+
+    local params
+    local built = pcall(function()
+        params = RaycastParams.new()
+        params.FilterDescendantsInstances = { chr(), shop }
+        params.FilterType = Enum.RaycastFilterType.Exclude
+    end)
+    if not built or not params then return true end
+
+    local hit
+    local cast = pcall(function()
+        hit = ws:Raycast(from, to - from, params)
+    end)
+    if not cast then return true end
+
+    return hit == nil
+end
+
 -- stalls sit in wildly different geometry, so try a few spots and keep
 -- whichever one actually leaves the target visible
-local function standSpots(t)
+local function standSpots(t, from)
     local spots = {}
+    local base = t.stand.Position
+
+    -- back toward wherever the player already was is near-guaranteed open ground
+    if from then
+        local away = from - base
+        away = Vector3.new(away.X, 0, away.Z)
+        if away.Magnitude > 1 then
+            spots[#spots+1] = away.Unit * cfg.standOut
+        end
+    end
 
     local ok, cf = pcall(function() return t.stand.CFrame end)
     if ok and cf then
@@ -240,17 +287,27 @@ local function standSpots(t)
     return spots
 end
 
-local function placeNear(g, t)
+local function placeNear(g, t, from)
     local up = Vector3.new(0, cfg.standUp, 0)
+    local fallback
 
-    for i,off in ipairs(standSpots(t)) do
+    for i,off in ipairs(standSpots(t, from)) do
         place(g, t.stand.Position + off + up, t.hd.Position)
         task.wait(cfg.spotSettle)
 
         local _, _, on = screenPos(t.hd.Position)
         if on or type(WorldToScreen) ~= "function" then
-            return true
+            fallback = fallback or (t.stand.Position + off + up)
+            if clearShot(t.hd.Position) then
+                return true
+            end
         end
+    end
+
+    -- nothing had a clear line, so settle for one that was at least in frame
+    if fallback then
+        place(g, fallback, t.hd.Position)
+        return false
     end
 
     place(g, t.hd.Position + Vector3.new(cfg.standOut, cfg.standUp, 0), t.hd.Position)
@@ -291,9 +348,9 @@ local function fireExternal(t)
 
         if t.d > maxdist then
             old = g.Position
-            placeNear(g, t)
+            placeNear(g, t, old)
             pcall(function() g.AssemblyLinearVelocity = Vector3.zero end)
-            task.wait(cfg.settle)
+            task.wait(cfg.postPlace)
         end
 
         local clicked = click(t.cd, t.hd)
