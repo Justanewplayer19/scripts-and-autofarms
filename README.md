@@ -1,0 +1,1 @@
+[![Reviewed on ScriptBlox, autoplayer.lua](https://scriptblox.com/badge/Universal-Script-Autoplayer-supports-3-games-237216)](https://scriptblox.com/script/Universal-Script-Autoplayer-supports-3-games-237216)
