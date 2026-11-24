@@ -764,6 +764,7 @@ if id == MMM then
         misspop = true,
         dodge = true,
         skipdeath = true,
+        autotype = true,
         dodgeat = 4,
         hplock = false,
         hpval = 0.5,
@@ -1214,6 +1215,152 @@ if id == MMM then
         end)
     end
 
+    local gmap, gsheet, gbank, ggen = nil, nil, nil, -1
+
+    local function letterscan(t)
+        local did, map, sheets, bank = {}, {}, {}, nil
+        local function isl(v)
+            if type(v) ~= "table" then return false end
+            local n = 0
+            for k in pairs(v) do if type(k) == "string" and #k == 1 then n = n + 1 end end
+            return n > 20
+        end
+        local function isb(v)
+            if type(v) ~= "table" or #v < 20 then return false end
+            for i,k in pairs(v) do if type(k) ~= "string" or #k < 2 then return false end end
+            return true
+        end
+        local function crawl(f, d)
+            if d > 8 or type(f) ~= "function" or did[f] then return end
+            did[f] = true
+            local oku, us = pcall(function() return getupvalues(f) end)
+            if oku and us then
+                for k,v in pairs(us) do
+                    if isl(v) then
+                        for k1,fs in pairs(v) do
+                            if type(k1) == "string" and #k1 == 1 and type(fs) == "table" then
+                                for i2,fr in pairs(fs) do
+                                    if type(fr) == "table" and fr.Image and fr.ImageRectOffset then
+                                        sheets[fr.Image] = true
+                                        map[fr.Image .. "@" .. tostring(fr.ImageRectOffset)] = k1
+                                    end
+                                end
+                            end
+                        end
+                    elseif not bank and isb(v) then
+                        bank = v
+                    end
+                    if type(v) == "function" then crawl(v, d + 1) end
+                end
+            end
+            local okp, ps = pcall(function() return debug.getprotos(f) end)
+            if okp and ps then for i,v in pairs(ps) do crawl(v, d + 1) end end
+        end
+        for k,v in pairs(t) do if typeof(v) == "function" then crawl(v, 0) end end
+        return map, sheets, bank
+    end
+
+    local function glyphdata()
+        if ggen == mcgen then return gmap end
+        ggen = mcgen
+        gmap, gsheet, gbank = nil, nil, nil
+
+        local t = modchart()
+        if type(t) == "table" then
+            local a, b, c = letterscan(t)
+            if next(a) then gmap, gsheet, gbank = a, b, c end
+        end
+        if not gmap and mctitle and mctitle:find("monochrome", 1, true) then
+            local mc = svc.rep:FindFirstChild("Modules")
+            mc = mc and mc:FindFirstChild("ModCharts")
+            for i,v in pairs(mc and mc:GetDescendants() or {}) do
+                if v:IsA("ModuleScript") and v.Name:lower():find("monochrome") then
+                    local ok, m = pcall(function() return require(v) end)
+                    if ok and type(m) == "table" then
+                        local a, b, c = letterscan(m)
+                        if next(a) then gmap, gsheet, gbank = a, b, c break end
+                    end
+                end
+            end
+        end
+        return gmap
+    end
+
+    local keymap = { [" "] = Enum.KeyCode.Space, ["!"] = Enum.KeyCode.One, ["?"] = Enum.KeyCode.Slash }
+
+    local function readword()
+        if not gmap or not gsheet then return nil end
+        local g = {}
+        for i,v in pairs(lp.PlayerGui:GetDescendants()) do
+            if v:IsA("ImageLabel") and gsheet[v.Image] and v.Visible then
+                local l = gmap[v.Image .. "@" .. tostring(v.ImageRectOffset)]
+                local ap = v.AbsolutePosition
+                if l and l ~= " " and ap.Y > 0 then
+                    g[#g + 1] = { l = l, x = ap.X, y = ap.Y, w = v.AbsoluteSize.X }
+                end
+            end
+        end
+        if #g < 3 then return nil end
+        table.sort(g, function(a, b)
+            if math.abs(a.y - b.y) > 24 then return a.y < b.y end
+            return a.x < b.x
+        end)
+
+        local raw, gap = "", ""
+        for i,v in pairs(g) do
+            local pv = g[i - 1]
+            if pv and v.x - (pv.x + pv.w) > pv.w * 0.6 then gap = gap .. " " end
+            raw = raw .. v.l
+            gap = gap .. v.l
+        end
+
+        if type(gbank) == "table" then
+            for i,ph in pairs(gbank) do
+                if type(ph) == "string" and (ph:gsub(" ", "")) == raw then return ph end
+            end
+        end
+        return gap
+    end
+
+    local function typeout(w)
+        for i = 1, #w do
+            local c = w:sub(i, i)
+            local k = keymap[c] or Enum.KeyCode[c]
+            if k then
+                svc.vim:SendKeyEvent(true, k, false, game)
+                svc.vim:SendKeyEvent(false, k, false, game)
+            end
+            svc.run.RenderStepped:Wait()
+        end
+    end
+
+    do
+        local busy, done, scan = false, nil, 0
+        task.spawn(function()
+            while alive do
+                task.wait(0.05)
+                if not cfg.autotype or busy then continue end
+                pcall(function()
+                    if not arrowgui() then done = nil return end
+                    local now = os.clock()
+                    if now - scan < 0.05 then return end
+                    scan = now
+                    if not glyphdata() then return end
+
+                    local w = readword()
+                    if not w then done = nil return end
+                    if w == done then return end
+                    done = w
+                    busy = true
+                    task.spawn(function()
+                        pcall(typeout, w)
+                        busy = false
+                    end)
+                end)
+            end
+        end)
+    end
+
     local dodgeerr
 
     task.spawn(function()
@@ -1348,6 +1495,7 @@ if id == MMM then
 
         prot:toggle("auto dodge", cfg.dodge, function(s) cfg.dodge = s end, "ap_dodge")
         prot:toggle("skip death notes", cfg.skipdeath, function(s) cfg.skipdeath = s end, "ap_skipdeath")
+        prot:toggle("type for me", cfg.autotype, function(s) cfg.autotype = s end, "ap_autotype")
         prot:slider("dodge window (degrees)", 1, 9, cfg.dodgeat, function(v) cfg.dodgeat = v end, "ap_dodgeat", 1)
         prot:label("leave direct on, it keeps playing while you are tabbed out")
 
@@ -1385,8 +1533,10 @@ if id == MMM then
             "charts with an exclamation mark next to them can kill you. the saw in termination and the swinging pendulum in safety lullaby, left unchecked and lost cause are now dodged for you. it reads the dodge key out of the game itself, so there is nothing to set up.")
         upd:paragraph("notes that kill you are left alone",
             "expurgation and hellclown mix in notes that kill you if you hit them. those get skipped now. death toll's custom notes are harmless so they still get played.")
-        upd:paragraph("not covered yet",
-            "musical memory, monochrome, missingno, cheating and unfairness have mechanics the game marks as unfair. they are not handled, so play those yourself.")
+        upd:paragraph("monochrome v1 gets typed for you",
+            "the typing bit in monochrome v1 is read off the screen and typed back in about a tenth of a second, spaces included. the window gets shorter the further into the song you are, so it types the whole thing at once instead of letter by letter.")
+        upd:paragraph("every song is covered now",
+            "the invisible notes in musical memory and the moving lanes in missingno get played normally, and cheating and unfairness are only marked unfair for being hard, nothing in them can kill you.")
 
         upd:section("earlier")
         upd:paragraph("rate your own notes",
