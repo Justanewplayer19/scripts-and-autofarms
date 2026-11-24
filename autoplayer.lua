@@ -560,11 +560,16 @@ end
 
 if id == MMM then
     svc.vim = call("VirtualInputManager")
+    svc.cas = call("ContextActionService")
+    svc.rep = call("ReplicatedStorage")
 
     local ng = require(lp.PlayerScripts.Start.Menu.Freeplay.NoteGame)
 
     local cls, notes, opt, st, stats, jd, sa, oldstats
     local hooked = false
+    local animbase, lastside
+    local jname = {}
+    local poperr
 
     local function resolve()
         if cls and notes and opt and st and stats and jd and sa then return true end
@@ -608,9 +613,80 @@ if id == MMM then
                 cls._ap_orig_UpdateStats = oldstats
             end
 
+            for k,v in pairs(jd) do jname[v] = k end
+
+            local function ismiss(x)
+                return type(x) == "table" and rawget(x, "AccuracyRating") == nil
+            end
+
+            local function isghost(x)
+                return ismiss(x) and (rawget(x, "Score") or 0) < 0
+            end
+
+            local function refresh()
+                for i,v in pairs(getupvalues(cls._GetClosestNote)) do
+                    if type(v) == "table" and rawget(v, "Sick") and rawget(v, "Miss_Note") then jd = v end
+                end
+                for i,v in pairs(getupvalues(cls._ArrowReleased)) do
+                    if type(v) == "table" and rawget(v, "Judgements") ~= nil then stats = v end
+                end
+                jname = {}
+                for k,v in pairs(jd) do jname[v] = k end
+            end
+
+            local function tally(add, drop)
+                local t = stats and stats.Judgements
+                if type(t) ~= "table" then return end
+                if drop and t[drop] and t[drop] > 0 then t[drop] = t[drop] - 1 end
+                if add then t[add] = (t[add] or 0) + 1 end
+            end
+
             local base = oldstats
             cls._UpdateStats = function(self, j, ...)
-                local miss = j == jd.Miss_Note or j == jd.Miss_Hit
+                if jname[j] == nil then refresh() end
+
+                local miss = j == jd.Miss_Note or j == jd.Miss_Hit or ismiss(j)
+
+                local ghost = j == jd.Miss_Hit or isghost(j)
+
+                if ghost and cfg.ghostdrop then
+                    return
+                end
+
+                if not ghost and miss and cfg.missfix then
+                    local to = jd[cfg.missas]
+                    if to then
+                        local m0 = stats.Misses
+                        local c0 = stats.Combo
+                        local r = base(self, to, to.AccuracyRating or 1, ...)
+
+                        if m0 and stats.Misses and stats.Misses > m0 then
+                            stats.Misses = m0
+                        end
+                        if c0 and stats.Combo and stats.Combo <= c0 then
+                            stats.Combo = c0 + 1
+                            if (stats.BestCombo or 0) < stats.Combo then stats.BestCombo = stats.Combo end
+                        end
+
+                        tally(cfg.missas)
+
+                        if cfg.misspop and animbase then
+                            local okp, ep = pcall(function() animbase(self, to, lastside) end)
+                            if not okp then poperr = tostring(ep) end
+                        end
+
+                        return r
+                    end
+                end
+
+                local renamed
+                if not miss and not ghost and cfg.force then
+                    local to = jd[cfg.forceas]
+                    if to and to ~= j then
+                        renamed = jname[j]
+                        j = to
+                    end
+                end
 
                 if miss and cfg.blockmiss then
                     return
@@ -623,10 +699,37 @@ if id == MMM then
                     return r
                 end
 
-                return base(self, j, ...)
+                local out = base(self, j, ...)
+                if renamed then tally(cfg.forceas, renamed) end
+                return out
             end
 
-            shut[#shut + 1] = function() cls._UpdateStats = base end
+            local oldanim = rawget(cls, "_ap_orig_AnimateAccuracy")
+            if not oldanim then
+                oldanim = cls._AnimateAccuracy
+                cls._ap_orig_AnimateAccuracy = oldanim
+            end
+            animbase = oldanim
+
+            cls._AnimateAccuracy = function(self, j, side, ...)
+                if side ~= nil then lastside = side end
+                if jname[j] == nil then refresh() end
+
+                local ghost = j == jd.Miss_Hit or isghost(j)
+                if ghost and cfg.ghostdrop then return end
+
+                if not ismiss(j) and not ghost and cfg.force then
+                    local to = jd[cfg.forceas]
+                    if to then j = to end
+                end
+
+                return animbase(self, j, side, ...)
+            end
+
+            shut[#shut + 1] = function()
+                cls._UpdateStats = base
+                cls._AnimateAccuracy = oldanim
+            end
         end
 
         return true
@@ -653,6 +756,15 @@ if id == MMM then
         ghostguard = true,
         blockmiss = false,
         combofix = false,
+        force = false,
+        forceas = "Sick",
+        missfix = false,
+        missas = "Sick",
+        ghostdrop = false,
+        misspop = true,
+        dodge = true,
+        skipdeath = true,
+        dodgeat = 4,
         hplock = false,
         hpval = 0.5,
         misschance = 0,
@@ -817,6 +929,125 @@ if id == MMM then
         return o
     end
 
+    local agui, mctitle, mctab, mcmodat, mcgen = nil, nil, nil, 0, 0
+    local danger
+
+    local function arrowgui()
+        if agui and agui.Parent then return agui end
+        agui = nil
+        for i,v in pairs(lp.PlayerGui:GetDescendants()) do
+            if v.Name == "ArrowGui" and v:IsA("GuiObject") then agui = v break end
+        end
+        return agui
+    end
+
+    local function songname()
+        local g = arrowgui()
+        local ti = g and g:FindFirstChild("Title", true)
+        if not ti or not ti.Text then return nil end
+        local t = ti.Text:gsub("<[^>]->", ""):gsub("%[[^%]]*%]", ""):gsub("%s+", " ")
+        return (t:gsub("^%s+", ""):gsub("%s+$", "")):lower()
+    end
+
+    local function modchart()
+        local now = os.clock()
+        if now - mcmodat > 2 then
+            mcmodat = now
+            local title = songname()
+            if title ~= mctitle then
+                mctitle, mctab, danger = title, nil, nil
+                mcgen = mcgen + 1
+            end
+        end
+        if mctab then return mctab end
+        if not mctitle then return nil end
+
+        local mc = svc.rep:FindFirstChild("Modules")
+        mc = mc and mc:FindFirstChild("ModCharts")
+        if not mc then return nil end
+
+        local best, bestlen
+        for i,v in pairs(mc:GetDescendants()) do
+            if v:IsA("ModuleScript") and v.Name:sub(1, 1) ~= "_" and v.Name ~= "API" and v.Name ~= "MechanicInfo" then
+                local nm = v.Name:gsub("_", " "):gsub("%(New%)", ""):gsub("%(new%)", "")
+                nm = (nm:gsub("^%s+", ""):gsub("%s+$", "")):lower()
+                if #nm >= 4 and mctitle:find(nm, 1, true) and (not bestlen or #nm > bestlen) then
+                    best, bestlen = v, #nm
+                end
+            end
+        end
+        if not best then return nil end
+
+        local ok, t = pcall(function() return require(best) end)
+        if ok and type(t) == "table" then mctab = t end
+        return mctab
+    end
+
+    local function dangerset()
+        if danger then return danger end
+        local t = modchart()
+        if not t then return nil end
+        danger = {}
+        local cn = rawget(t, "_CustomNoteConfig")
+        if type(cn) == "table" and type(cn.IsDangerous) == "table" and type(cn.ArrowSkinData) == "table" then
+            for skin,bad in pairs(cn.IsDangerous) do
+                local sd = bad and cn.ArrowSkinData[skin]
+                if type(sd) == "table" then
+                    for dir,frames in pairs(sd) do
+                        if type(frames) == "table" then
+                            for i,fr in pairs(frames) do
+                                if type(fr) == "table" and type(fr.Image) == "string" then
+                                    danger[fr.Image] = true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return danger
+    end
+
+    local dnote = setmetatable({}, { __mode = "k" })
+    local wrapped
+
+    local function wrapnotes()
+        local t = modchart()
+        if not t then return end
+        local cn = rawget(t, "_CustomNoteConfig")
+        if type(cn) ~= "table" or type(cn.IsDangerous) ~= "table" then return end
+        if wrapped == cn then return end
+        wrapped = cn
+
+        local base = rawget(cn, "_ap_orig_CustomizeNote") or cn.CustomizeNote
+        if typeof(base) ~= "function" then return end
+        cn._ap_orig_CustomizeNote = base
+
+        cn.CustomizeNote = function(...)
+            local args = table.pack(...)
+            pcall(function()
+                local frame, skin
+                for i = 1, args.n do
+                    local v = args[i]
+                    if not frame and typeof(v) == "Instance" and v:IsA("GuiObject") then frame = v end
+                    if not skin and type(v) == "string" and cn.IsDangerous[v] ~= nil then skin = v end
+                end
+                if frame and skin then dnote[frame] = cn.IsDangerous[skin] == true end
+            end)
+            return base(...)
+        end
+    end
+
+    local function deadly(f)
+        if not cfg.skipdeath then return false end
+        wrapnotes()
+        if dnote[f] ~= nil then return dnote[f] end
+        local d = dangerset()
+        if not d or not next(d) then return false end
+        local ok, img = pcall(function() return f.Image end)
+        return ok and type(img) == "string" and d[img] == true
+    end
+
     local function fire(d, e)
         shot[d] = true
         tshot[d] = os.clock()
@@ -868,7 +1099,9 @@ if id == MMM then
                     shot[d] = nil
                     seen = seen + 1
 
-                    if cfg.misschance > 0 and math.random(1, 100) <= cfg.misschance then
+                    if deadly(f) then
+                        shot[d] = true
+                    elseif cfg.misschance > 0 and math.random(1, 100) <= cfg.misschance then
                         shot[d] = true
                     elseif cfg.breakevery > 0 and seen % cfg.breakevery == 0 then
                         shot[d] = true
@@ -893,6 +1126,148 @@ if id == MMM then
                         tshot[d] = nil
                     end
                 end
+            end
+        end
+    end)
+
+    local pend, pkey, parm, plast = nil, nil, true, 0
+    local pseen, pscan = 0, 0
+    local mech, mechat, mechgen = nil, 0, -1
+    local ptries, pabs = 0, nil
+
+    local function mechlive(m)
+        local sf = rawget(m, "SawFrame")
+        if typeof(sf) ~= "Instance" or not sf.Parent then return false end
+        for i,v in pairs(sf:GetDescendants()) do
+            if v:IsA("ImageLabel") then return true end
+        end
+        return false
+    end
+
+    local function mechok(m)
+        return type(m) == "table"
+    end
+
+    local function findmech()
+        if mechok(mech) and mechgen == mcgen then return mech end
+        if os.clock() - mechat < 2 then return nil end
+        mechat = os.clock()
+        mech = nil
+
+        local t = modchart()
+        if not t then return nil end
+
+        local seen = {}
+        local function crawl(f, depth)
+            if mech or depth > 6 or type(f) ~= "function" or seen[f] then return end
+            seen[f] = true
+            local oku, us = pcall(function() return getupvalues(f) end)
+            if oku and us then
+                for k,v in pairs(us) do
+                    if type(v) == "table" and (rawget(v, "CanDodge") ~= nil or rawget(v, "SawFrame") ~= nil
+                        or rawget(v, "LastDodge") ~= nil or rawget(v, "WarningImage") ~= nil) then
+                        mech = v
+                        return
+                    end
+                    if type(v) == "function" then crawl(v, depth + 1) end
+                end
+            end
+            local okp, ps = pcall(function() return debug.getprotos(f) end)
+            if okp and ps then for i,v in pairs(ps) do crawl(v, depth + 1) end end
+        end
+        for k,v in pairs(t) do if typeof(v) == "function" then crawl(v, 0) end end
+
+        if mech then
+            mechgen = mcgen
+        end
+        return mech
+    end
+
+    local function dodgekey()
+        if pkey then return pkey end
+        local ok, all = pcall(function() return svc.cas:GetAllBoundActionInfo() end)
+        if ok and type(all) == "table" then
+            for nm,info in pairs(all) do
+                if tostring(nm):sub(1, 6) == "Event-" then
+                    for i,t in pairs(info.inputTypes or {}) do
+                        if typeof(t) == "EnumItem" and t.EnumType == Enum.KeyCode then
+                            pkey = t
+                            return pkey
+                        end
+                    end
+                end
+            end
+        end
+        if pseen > 0 and os.clock() - pseen > 1.5 then
+            pkey = Enum.KeyCode.Space
+            return pkey
+        end
+        return nil
+    end
+
+    local function tap(k)
+        if not k then return end
+        plast = os.clock()
+        svc.vim:SendKeyEvent(true, k, false, game)
+        task.delay(0.03, function()
+            pcall(function() svc.vim:SendKeyEvent(false, k, false, game) end)
+        end)
+    end
+
+    local dodgeerr
+
+    task.spawn(function()
+        while alive do
+            svc.run.RenderStepped:Wait()
+            if not cfg.dodge then
+                pkey, pseen, mech = nil, 0, nil
+                continue
+            end
+
+            local okd, ed = pcall(function()
+            local now = os.clock()
+
+            local m = arrowgui() and findmech() or nil
+            if m then
+                if pseen == 0 then pseen = now end
+                if not rawget(m, "CanDodge") or not mechlive(m) then ptries = 0 end
+                if rawget(m, "CanDodge") == true and mechlive(m) and not rawget(m, "Dodged") and ptries < 3 and now - plast > 0.22 then
+                    ptries = ptries + 1
+                    tap(dodgekey())
+                end
+            end
+
+            if now - pscan > 0.1 then
+                pscan = now
+                local g = arrowgui()
+                pend = nil
+                if g then
+                    local f = g:FindFirstChild("Pendulum", true)
+                    if f and f:IsA("GuiObject") then pend = f end
+                end
+            end
+
+            if pend and pend.Parent then
+                if pseen == 0 then pseen = now end
+                local r = pend.Rotation
+                local a = math.abs(r)
+                if a > 18 then parm = true end
+                local k = dodgekey()
+                if parm and k and a <= cfg.dodgeat and now - plast > 0.2 then
+                    if a <= 1 or (pabs and a > pabs) then
+                        parm = false
+                        tap(k)
+                    end
+                end
+                pabs = a
+            end
+
+            if not pend and not m then pseen, pkey = 0, nil end
+            end)
+
+            if not okd and tostring(ed) ~= dodgeerr then
+                dodgeerr = tostring(ed)
+                warn("autoplay: auto dodge stopped working, try reloading")
             end
         end
     end)
@@ -923,6 +1298,8 @@ if id == MMM then
     local hum = w:tab("Human", "user")
     local lane = w:tab("Lanes", "columns-3")
     local info = w:tab("Stats", "bar-chart-2")
+    local own = w:tab("Yourself", "hand")
+    local upd = w:tab("Updates", "bell")
 
     do
         main:section("autoplay")
@@ -955,7 +1332,7 @@ if id == MMM then
         tm:toggle("hold tails", cfg.hold, function(s) cfg.hold = s end, "ap_hold")
         tm:slider("retap long notes (ms, 0 = just hold)", 0, 200, cfg.retap, function(v) cfg.retap = v end, "ap_retap", 5)
 
-        tm:paragraph("how close you need to be", "sick is the tightest window, then good, then ok, then bad as you drift further from the line. aim for sick to sit right on top of every note.")
+        tm:label("sick is tightest, then good, ok, bad. aim for sick")
     end
 
     do
@@ -968,12 +1345,33 @@ if id == MMM then
         prot:section("input")
         prot:toggle("direct input (works tabbed out)", cfg.direct, function(s) cfg.direct = s end, "ap_direct")
         prot:toggle("anti idle", cfg.antiidle, function(s) cfg.antiidle = s end, "ap_idle")
-        prot:paragraph("what this does", "leave this on. it lets autoplay hit notes without roblox having to be the window you are looking at, so you can tab away and it keeps playing. your arrows and character still animate exactly as normal. turn it off and it goes back to sending real key presses, which only work while roblox is focused.")
+
+        prot:toggle("auto dodge", cfg.dodge, function(s) cfg.dodge = s end, "ap_dodge")
+        prot:toggle("skip death notes", cfg.skipdeath, function(s) cfg.skipdeath = s end, "ap_skipdeath")
+        prot:slider("dodge window (degrees)", 1, 9, cfg.dodgeat, function(v) cfg.dodgeat = v end, "ap_dodgeat", 1)
+        prot:label("leave direct on, it keeps playing while you are tabbed out")
 
         prot:section("stat blocking")
         prot:toggle("block misses", cfg.blockmiss, function(s) cfg.blockmiss = s end, "ap_bmiss")
         prot:toggle("keep combo on miss", cfg.combofix, function(s) cfg.combofix = s end, "ap_cfix")
-        prot:paragraph("what these do", "your own game counts the misses before it reports them, so blocking them means they never get sent at all. keep combo is the gentler option, it lets the miss count normally but puts your combo back where it was.")
+        prot:label("block drops the miss, keep combo lets it count but saves your combo")
+
+        own:section("what your hits count as")
+        own:toggle("rate every hit myself", cfg.force, function(s) cfg.force = s end, "ap_force")
+        own:dropdown("count my hits as", { "Sick", "Good", "Ok", "Bad" }, cfg.forceas, function(v) cfg.forceas = v end, "ap_forceas")
+
+        own:section("misses")
+        own:toggle("turn misses into a hit", cfg.missfix, function(s) cfg.missfix = s end, "ap_missfix")
+        own:dropdown("count misses as", { "Sick", "Good", "Ok", "Bad" }, cfg.missas, function(v) cfg.missas = v end, "ap_missas")
+
+        own:toggle("pop the rating up on a turned miss", cfg.misspop, function(s) cfg.misspop = s end, "ap_misspop")
+        own:label("shows the rating on screen like a real hit")
+
+        own:section("ghost taps")
+        own:toggle("ignore taps on an empty lane", cfg.ghostdrop, function(s) cfg.ghostdrop = s end, "ap_ghost")
+        own:label("empty taps never earn score, this only drops the 50 point penalty")
+
+        own:label("play with autoplay off, your notes just get written down as what you picked")
 
         prot:section("health bar")
         prot:toggle("lock bar", cfg.hplock, function(s) cfg.hplock = s end, "ap_hplock")
@@ -982,10 +1380,26 @@ if id == MMM then
     end
 
     do
+        upd:section("22 november")
+        upd:paragraph("songs with mechanics get played for you",
+            "charts with an exclamation mark next to them can kill you. the saw in termination and the swinging pendulum in safety lullaby, left unchecked and lost cause are now dodged for you. it reads the dodge key out of the game itself, so there is nothing to set up.")
+        upd:paragraph("notes that kill you are left alone",
+            "expurgation and hellclown mix in notes that kill you if you hit them. those get skipped now. death toll's custom notes are harmless so they still get played.")
+        upd:paragraph("not covered yet",
+            "musical memory, monochrome, missingno, cheating and unfairness have mechanics the game marks as unfair. they are not handled, so play those yourself.")
+
+        upd:section("earlier")
+        upd:paragraph("rate your own notes",
+            "the Yourself tab lets you play with autoplay off and still choose what each note counts as, and turn notes you never touched into hits.")
+
+        upd:label("both new settings live in the Protect tab and are already on")
+    end
+
+    do
         hum:section("mistakes")
         hum:slider("miss chance (%)", 0, 25, cfg.misschance, function(v) cfg.misschance = v end, "ap_miss", 1)
         hum:slider("drop every n notes (0 = never)", 0, 200, cfg.breakevery, function(v) cfg.breakevery = v end, "ap_break", 1)
-        hum:paragraph("tip", "aiming for good with jitter near 25 and about a 2% miss chance reads a lot more like a real run than a flawless streak does.")
+        hum:label("good with jitter 25 and 2% misses reads like a real run")
     end
 
     resolve()
@@ -996,6 +1410,13 @@ if id == MMM then
             lane:toggle(v:lower(), true, function(s) cfg.lanes[v] = s end, "ap_lane_"..v)
         end
     end
+
+    task.delay(1.5, function()
+        local ok = pcall(function()
+            w:notify("mmm autoplay", "new: mechanic songs get dodged for you, see the Updates tab", 7, "bell")
+        end)
+        if not ok then pcall(kyri.toast, "mmm autoplay updated, see the Updates tab") end
+    end)
 
     local lblscore, lblacc, lblmiss, lblcombo, lbljudge, bar
     do
